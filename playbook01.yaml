@@ -1,0 +1,42 @@
+---
+- hosts: localhost
+  become: true
+  become_method: sudo
+  gather_facts: true
+  vars_files:
+          - variable.yaml
+  tasks:
+  
+  - name: Check if Gitlab-Repo is Installed
+    shell: |
+      #!/bin/bash
+      ls -l | grep gitlab-runner-a01 | awk 'NR == 1 {print $9}'
+    register: ls_cmd
+    ignore_errors: true
+
+  - name: Clone Git Repo If not
+    shell: |
+      git clone https://github.com/Abhishek010397/gitlab-runner-a01.git
+    when: ls_cmd is failed
+    
+  - name: Get Secret
+    shell: |
+      #!/bin/bash
+      kubectl get secret gitlab-gitlab-runner-secret -ojsonpath='{.data.runner-registration-token}' -n gitlab | base64 --decode ; echo
+    register: shell_result
+
+  - name: Check If Helm Chart is present
+    shell: |
+      #!/bin/bash
+      export KUBECONFIG=.kube/config
+      helm ls -n gitlab | grep gitlab-runner
+    register: helm_ls_cmd
+    ignore_errors: true
+
+  - name: Execute Helm Chart
+    shell: |
+      #!/bin/bash
+      export KUBECONFIG=.kube/config
+      helm upgrade --install -f values.yaml gitlab-runner ./gitlab-runner --set gitlabUrl="{{ gitlabUrl }}" --set runnerRegistrationToken="{{ shell_result.stdout }}" --set privileged=true --namespace=gitlab
+    when: helm_ls_cmd is failed
+  
