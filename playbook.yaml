@@ -1,0 +1,78 @@
+---
+- hosts: localhost
+  become: true
+  become_method: sudo
+  gather_facts: true
+  vars_files:
+    - variable.yaml
+  tasks: 
+
+  - pip:
+      name: boto
+
+  - name: Check if namespace exist
+    shell: |
+     #!/bin/bash
+     export KUBECONFIG=.kube/config
+     kubectl get namespace | grep gitlab
+    register: kubectl_namespace
+    ignore_errors: true
+
+  - name: Create Namespace if not exists
+    shell: |
+     #!/bin/bash
+     export KUBECONFIG=.kube/config
+     kubectl create namespace gitlab
+    when: kubectl_namespace is failed
+
+  - name: Check if gitlab helm chart is Installed
+    shell: |
+      #!/bin/bash
+      export KUBECONFIG=.kube/config
+      helm ls -n gitlab | grep gitlab 
+    register: helm_ls_cmd
+    ignore_errors: true
+
+  - name: Clone Helm Chart if not exists
+    shell: |
+      #!/bin/bash
+      export KUBECONFIG=.kube/config
+      helm repo add gitlab https://charts.gitlab.io/ 
+      helm repo update
+    when: helm_ls_cmd is failed
+
+  - name: Execute Helm Chart
+    shell: |
+     #!/bin/bash
+     export KUBECONFIG=.kube/config
+     helm upgrade --install gitlab gitlab/gitlab --set global.hosts.domain=gitlab.labcerebrone.com --set certmanager-issuer.email=false --set gitlab-runner.install=false --namespace=gitlab
+    when: helm_ls_cmd is failed
+    
+  - name: Retrive the IP Address
+    shell: |
+      #!/bin/bash
+      export KUBECONFIG=.kube/config
+      kubectl get ingress gitlab-webservice -n gitlab | awk 'NR ==2 {print $3}' 
+    register: ip_result
+  
+  - name: Store IP to Route53
+    route53:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      state: present
+      zone: "{{ zone }}"
+      record: "{{ record }}"
+      type: CNAME
+      ttl: 360
+      value: "{{ ip_result.stdout }}"
+      
+
+  - name: Get the Sign In Token
+    shell: |
+     #!/bin/bash
+     export KUBECONFIG=.kube/config
+     kubectl get secret gitlab-gitlab-initial-root-password -ojsonpath='{.data.password}' -n gitlab | base64 --decode ; echo
+    register: secret_result
+
+
+
